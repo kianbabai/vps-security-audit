@@ -4,6 +4,7 @@ audit:
   max_log_lines: 50000
   report_directory: reports/output
   history_file: database/history.json
+  baseline_file: database/baseline.json
   history_limit: 90
   include_package_list: true
 
@@ -23,11 +24,16 @@ ssh:
     - /var/log/secure
   failed_login_threshold: 10
   distributed_attack_threshold: 20
+  success_after_failure_threshold: 5
   unusual_login_start_hour: 0
   unusual_login_end_hour: 5
   authorized_keys_globs:
     - /root/.ssh/authorized_keys
     - /home/*/.ssh/authorized_keys
+
+users:
+  inactive_days: 90
+  recent_account_days: 7
 
 network:
   dangerous_ports: [21, 23, 111, 139, 445, 2375, 3306, 5432, 6379, 9200, 11211, 27017]
@@ -63,6 +69,14 @@ wordpress:
     - /srv/proxy/logs/access.log
   login_attack_threshold: 20
 
+web_server:
+  access_log_paths:
+    - /var/log/nginx/access.log
+    - /var/log/apache2/access.log
+    - /var/log/caddy/access.log
+    - /srv/proxy/logs/access.log
+  request_threshold_per_ip: 500
+
 filesystem:
   tracked_paths:
     - /etc/passwd
@@ -93,7 +107,7 @@ cron:
     - "base64 *-d"
     - "nc *-e"
 
-malware:
+process:
   high_cpu_percent: 80
   suspicious_process_names:
     - xmrig

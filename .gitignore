@@ -16,6 +16,7 @@ vps-audit-report-*.txt
 
 # Runtime audit state (contains hostnames, IPs, users, ports, and hashes)
 database/history.json
+database/baseline.json
 
 # Local and production-specific configuration
 config.local.yaml

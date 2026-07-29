@@ -16,11 +16,11 @@ class Severity(str, Enum):
     INFO = "info"
 
 
-PENALTIES: dict[Severity, int] = {
-    Severity.CRITICAL: 20,
-    Severity.HIGH: 10,
-    Severity.MEDIUM: 5,
-    Severity.LOW: 2,
+DEFAULT_RISK_SCORES: dict[Severity, int] = {
+    Severity.CRITICAL: 30,
+    Severity.HIGH: 18,
+    Severity.MEDIUM: 10,
+    Severity.LOW: 4,
     Severity.INFO: 0,
 }
 
@@ -35,10 +35,23 @@ class Finding:
     evidence: str
     recommendation: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    risk_score: int | None = None
+    confidence: int = 80
+    reason: str = ""
+    remediation_commands: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.risk_score is None:
+            self.risk_score = DEFAULT_RISK_SCORES[self.severity]
+        self.risk_score = max(0, min(100, int(self.risk_score)))
+        self.confidence = max(0, min(100, int(self.confidence)))
 
     def to_dict(self) -> dict[str, Any]:
         item = asdict(self)
         item["severity"] = self.severity.value
+        item["what_happened"] = self.description
+        item["why_it_matters"] = self.reason or self.description
+        item["how_to_fix"] = self.recommendation
         return item
 
 
@@ -99,4 +112,3 @@ def severity_counts(findings: list[Finding]) -> dict[str, int]:
     for finding in findings:
         counts[finding.severity.value] += 1
     return counts
-

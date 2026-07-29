@@ -35,6 +35,8 @@ def parse_access_lines(lines: Iterable[str], request_threshold: int) -> tuple[di
     scanners: Counter[str] = Counter()
     wp_login: Counter[str] = Counter()
     xmlrpc: Counter[str] = Counter()
+    sql_injection: Counter[str] = Counter()
+    path_traversal: Counter[str] = Counter()
     parsed = 0
 
     for line in lines:
@@ -55,6 +57,10 @@ def parse_access_lines(lines: Iterable[str], request_threshold: int) -> tuple[di
             wp_login[ip] += 1
         if "/xmlrpc.php" in path:
             xmlrpc[ip] += 1
+        if any(marker in uri for marker in ("%27", "' or ", "union select", "sleep(", "benchmark(", "or 1=1")):
+            sql_injection[ip] += 1
+        if any(marker in uri for marker in ("../", "..%2f", "%2e%2e", "/etc/passwd", "/proc/self")):
+            path_traversal[ip] += 1
 
     findings: list[Finding] = []
     noisy = {ip: count for ip, count in ips.items() if count >= request_threshold}
@@ -68,6 +74,9 @@ def parse_access_lines(lines: Iterable[str], request_threshold: int) -> tuple[di
                 "Client request counts exceeded the configured per-scan threshold.",
                 ", ".join(f"{ip}: {count}" for ip, count in Counter(noisy).most_common(20)),
                 "Review the clients and tune Cloudflare rate limiting or bot controls where appropriate.",
+                risk_score=8,
+                confidence=60,
+                reason="High volume can be abusive, but may also represent a legitimate crawler, proxy, or busy client.",
             )
         )
     if scanners:
@@ -82,6 +91,36 @@ def parse_access_lines(lines: Iterable[str], request_threshold: int) -> tuple[di
                 "Confirm the origin is not directly exposed and review Cloudflare/WAF rules and application logs.",
             )
         )
+    if sql_injection:
+        findings.append(
+            Finding(
+                "web.sql_injection_probing",
+                "SQL injection probing detected",
+                Severity.HIGH,
+                "web",
+                "Request URIs contained common SQL injection operators or timing-function payloads.",
+                ", ".join(f"{ip}: {count}" for ip, count in sql_injection.most_common(20)),
+                "Inspect application responses and database logs, validate parameterized queries, and tune WAF rules.",
+                risk_score=28,
+                confidence=85,
+                reason="SQL injection probes can lead to data disclosure or remote code execution when an endpoint is vulnerable.",
+            )
+        )
+    if path_traversal:
+        findings.append(
+            Finding(
+                "web.path_traversal_probing",
+                "Path traversal probing detected",
+                Severity.HIGH,
+                "web",
+                "Requests attempted parent-directory traversal or access to sensitive operating-system paths.",
+                ", ".join(f"{ip}: {count}" for ip, count in path_traversal.most_common(20)),
+                "Review response codes and application logs, normalize paths, and block confirmed hostile patterns at the edge.",
+                risk_score=26,
+                confidence=90,
+                reason="Successful traversal can expose credentials, configuration, and host files.",
+            )
+        )
 
     return {
         "parsed_requests": parsed,
@@ -91,6 +130,8 @@ def parse_access_lines(lines: Iterable[str], request_threshold: int) -> tuple[di
         "scanner_requests_by_ip": dict(scanners.most_common(50)),
         "wp_login_by_ip": dict(wp_login.most_common(50)),
         "xmlrpc_by_ip": dict(xmlrpc.most_common(50)),
+        "sql_injection_by_ip": dict(sql_injection.most_common(50)),
+        "path_traversal_by_ip": dict(path_traversal.most_common(50)),
     }, findings
 
 

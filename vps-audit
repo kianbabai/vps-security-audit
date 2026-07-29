@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHON="$PROJECT_DIR/.venv/bin/python"
+
+if [ ! -x "$PYTHON" ]; then
+    PYTHON=$(command -v python3)
+fi
+
+exec "$PYTHON" "$PROJECT_DIR/main.py" "$@"

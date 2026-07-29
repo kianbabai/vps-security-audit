@@ -9,6 +9,7 @@ from typing import Any
 
 from analyzers.brute_force import analyze_auth_lines
 from audit_context import AuditContext
+from geoip_lookup import countries_for_ips
 from models import Finding, ModuleResult, Severity
 
 
@@ -26,6 +27,11 @@ def audit(context: AuditContext) -> ModuleResult:
         Severity.HIGH,
         f"PermitRootLogin {effective.get('permitrootlogin', 'not resolved')}",
         "Set PermitRootLogin no and use a named administrative account with sudo.",
+        [
+            "sudoedit /etc/ssh/sshd_config",
+            "sudo sshd -t",
+            "sudo systemctl reload ssh",
+        ],
     )
     _config_finding(
         findings,
@@ -35,6 +41,11 @@ def audit(context: AuditContext) -> ModuleResult:
         Severity.HIGH,
         f"PasswordAuthentication {effective.get('passwordauthentication', 'not resolved')}",
         "After confirming key-based access works, set PasswordAuthentication no.",
+        [
+            "sudoedit /etc/ssh/sshd_config",
+            "sudo sshd -t",
+            "sudo systemctl reload ssh",
+        ],
     )
     _config_finding(
         findings,
@@ -44,6 +55,11 @@ def audit(context: AuditContext) -> ModuleResult:
         Severity.CRITICAL,
         f"PermitEmptyPasswords {effective.get('permitemptypasswords')}",
         "Set PermitEmptyPasswords no immediately and review all account password states.",
+        [
+            "sudoedit /etc/ssh/sshd_config",
+            "sudo sshd -t",
+            "sudo systemctl reload ssh",
+        ],
     )
     if not effective.get("allowusers") and not effective.get("allowgroups"):
         findings.append(
@@ -65,9 +81,18 @@ def audit(context: AuditContext) -> ModuleResult:
         int(config["distributed_attack_threshold"]),
         int(config["unusual_login_start_hour"]),
         int(config["unusual_login_end_hour"]),
+        int(config["success_after_failure_threshold"]),
     )
+    countries = countries_for_ips(
+        [item["ip"] for item in auth_data["failed_by_ip"]],
+        context.config.get("privacy", {}).get("geoip_database"),
+        errors,
+    )
+    for attacker in auth_data["failed_by_ip"]:
+        attacker["country"] = countries.get(attacker["ip"], "unknown")
     findings.extend(auth_findings)
     key_data = _authorized_keys(config["authorized_keys_globs"], errors)
+    fail2ban = context.run(["systemctl", "is-active", "fail2ban"], timeout=3)
     current_keys = sorted(item["fingerprint"] for item in key_data)
     previous_keys = set((context.previous_scan or {}).get("snapshot", {}).get("ssh_keys", []))
     for fingerprint in sorted(set(current_keys) - previous_keys) if context.previous_scan else []:
@@ -91,7 +116,28 @@ def audit(context: AuditContext) -> ModuleResult:
         {
             "config_path": config["config_path"],
             "effective_configuration": effective,
+            "security_status": {
+                "root_login": (
+                    "DISABLED" if effective.get("permitrootlogin") == "no"
+                    else "KEY_ONLY" if effective.get("permitrootlogin") in {"prohibit-password", "without-password"}
+                    else "RESTRICTED" if effective.get("permitrootlogin") == "forced-commands-only"
+                    else "ENABLED_OR_UNRESOLVED"
+                ),
+                "password_login": (
+                    "DISABLED" if effective.get("passwordauthentication") == "no" else "ENABLED_OR_UNRESOLVED"
+                ),
+                "ssh_keys": "YES" if key_data else "NO",
+                "port": int(effective.get("port", "22").split()[0])
+                if effective.get("port", "22").split()[0].isdigit()
+                else effective.get("port", "unknown"),
+            },
             "authentication": auth_data,
+            "attack_summary": {
+                "failed_login_attempts": auth_data["total_failures"],
+                "unique_attacking_ips": auth_data["distinct_failure_ips"],
+                "top_attackers": auth_data["failed_by_ip"][:20],
+                "fail2ban_active": fail2ban.stdout.strip() == "active",
+            },
             "authorized_keys": key_data,
         },
         findings,
@@ -174,8 +220,20 @@ def _config_finding(
     severity: Severity,
     evidence: str,
     recommendation: str,
+    remediation_commands: list[str] | None = None,
 ) -> None:
     if condition:
         findings.append(
-            Finding(finding_id, title, severity, "ssh", "The effective SSH policy increases remote-access risk.", evidence, recommendation)
+            Finding(
+                finding_id,
+                title,
+                severity,
+                "ssh",
+                "The effective SSH policy increases remote-access risk.",
+                evidence,
+                recommendation,
+                remediation_commands=remediation_commands or [],
+                confidence=90 if "not resolved" not in evidence else 55,
+                reason="The effective SSH authentication policy permits a higher-risk remote access path.",
+            )
         )

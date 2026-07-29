@@ -139,23 +139,27 @@ def _container_findings(item: dict[str, Any]) -> list[Finding]:
         findings.append(
             _finding(name, "privileged", "Privileged Docker container", Severity.CRITICAL,
                      "Privileged mode removes most container isolation.",
-                     "Run with privileged=false and grant only individually required capabilities.")
+                     "Run with privileged=false and grant only individually required capabilities.",
+                     risk_score=55, confidence=95)
         )
-    if item["user"] in {"root (default)", "0", "root"}:
+    if item["state"] == "running" and item["user"] in {"root (default)", "0", "root"}:
         findings.append(
             _finding(name, "root_user", "Container runs as root", Severity.MEDIUM,
                      f"Configured user: {item['user']}",
-                     "Use a non-root USER in the image or set user in the deployment configuration.")
+                     "Use a non-root USER in the image or set user in the deployment configuration.",
+                     risk_score=12, confidence=90)
         )
     if item["network_mode"] == "host":
         findings.append(
             _finding(name, "host_network", "Container uses host networking", Severity.HIGH,
-                     "NetworkMode=host", "Use a dedicated bridge network unless host networking is strictly required.")
+                     "NetworkMode=host", "Use a dedicated bridge network unless host networking is strictly required.",
+                     risk_score=28, confidence=95)
         )
     if item["pid_mode"] == "host":
         findings.append(
             _finding(name, "host_pid", "Container shares the host PID namespace", Severity.HIGH,
-                     "PidMode=host", "Remove host PID sharing unless it is essential and tightly controlled.")
+                     "PidMode=host", "Remove host PID sharing unless it is essential and tightly controlled.",
+                     risk_score=35, confidence=95)
         )
     dangerous = {"/", "/etc", "/boot", "/proc", "/sys", "/var/run", "/var/run/docker.sock"}
     for mount in item["mounts"]:
@@ -164,24 +168,46 @@ def _container_findings(item: dict[str, Any]) -> list[Finding]:
             findings.append(
                 _finding(name, f"dangerous_mount.{source}", "Sensitive host path mounted writable", Severity.HIGH,
                          f"{source} -> {mount['destination']} (read-write)",
-                         "Remove the mount or make it read-only with the narrowest possible source path.")
+                         "Remove the mount or make it read-only with the narrowest possible source path.",
+                         risk_score=38, confidence=95)
             )
     if "ALL" in item["cap_add"]:
         findings.append(
             _finding(name, "all_capabilities", "Container adds all Linux capabilities", Severity.CRITICAL,
-                     "CapAdd includes ALL", "Drop all capabilities and add back only those demonstrably required.")
+                     "CapAdd includes ALL", "Drop all capabilities and add back only those demonstrably required.",
+                     risk_score=52, confidence=95)
         )
     for port in item["published_ports"]:
         if port["public"]:
+            raw_port = str(port["container"]).split("/", 1)[0]
+            database = raw_port in {"3306", "5432", "6379", "9200", "11211", "27017"}
             findings.append(
-                _finding(name, f"public_port.{port['host_port']}", "Container publishes a port on all interfaces",
-                         Severity.LOW, f"{port['host_ip']}:{port['host_port']} -> {port['container']}",
-                         "Publish through Caddy or bind to loopback when direct public access is not required.")
+                _finding(
+                    name,
+                    f"public_port.{port['host_port']}",
+                    "Database container is publicly published" if database else "Container publishes a port on all interfaces",
+                    Severity.HIGH if database else Severity.LOW,
+                    f"{port['host_ip']}:{port['host_port']} -> {port['container']}",
+                    "Bind the database to an internal Docker network or loopback."
+                    if database
+                    else "Publish through Caddy or bind to loopback when direct public access is not required.",
+                    risk_score=42 if database else 8,
+                    confidence=95,
+                )
             )
     return findings
 
 
-def _finding(name: str, suffix: str, title: str, severity: Severity, evidence: str, recommendation: str) -> Finding:
+def _finding(
+    name: str,
+    suffix: str,
+    title: str,
+    severity: Severity,
+    evidence: str,
+    recommendation: str,
+    risk_score: int | None = None,
+    confidence: int = 85,
+) -> Finding:
     return Finding(
         f"docker.{name}.{suffix}".replace("/", "_"),
         f"{title}: {name}",
@@ -191,6 +217,9 @@ def _finding(name: str, suffix: str, title: str, severity: Severity, evidence: s
         evidence,
         recommendation,
         {"container": name},
+        risk_score=risk_score,
+        confidence=confidence,
+        reason="The container setting weakens isolation or exposes a workload beyond its intended trust boundary.",
     )
 
 

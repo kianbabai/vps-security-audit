@@ -16,8 +16,17 @@
     .card,.panel { background:var(--panel); border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 3px 14px #0f172a0b; }
     .card { padding:18px; } .card strong { display:block; font-size:28px; margin-top:4px; }
     .panel { padding:20px; margin-top:14px; overflow:auto; }
-    .score,.risk-GOOD { color:var(--good); } .risk-CRITICAL,.critical { color:var(--critical); }
-    .risk-WARNING,.high { color:var(--high); } .medium { color:var(--medium); } .low { color:var(--low); }
+    .score,.risk-HEALTHY { color:var(--good); } .risk-CRITICAL,.critical { color:var(--critical); }
+    .risk-HIGH,.high { color:var(--high); } .risk-MEDIUM,.medium { color:var(--medium); }
+    .risk-LOW,.low { color:var(--low); }
+    .score-ring { width:128px; height:128px; margin:auto; border-radius:50%;
+      display:grid; place-items:center; background:conic-gradient(
+        {% if report.risk_level == "CRITICAL" %}var(--critical){% elif report.risk_level == "HIGH" %}var(--high){% elif report.risk_level == "MEDIUM" %}var(--medium){% elif report.risk_level == "LOW" %}var(--low){% else %}var(--good){% endif %}
+        {{ report.score }}%,#e2e8f0 0); position:relative; }
+    .score-ring::after { content:""; position:absolute; width:96px; height:96px; border-radius:50%; background:white; }
+    .score-ring strong { position:relative; z-index:1; font-size:25px; }
+    .timeline { border-left:3px solid #cbd5e1; margin-left:8px; padding-left:20px; }
+    .timeline li { margin:12px 0; }
     table { width:100%; border-collapse:collapse; min-width:760px; }
     th,td { padding:11px 10px; text-align:left; border-bottom:1px solid #e2e8f0; vertical-align:top; }
     th { color:#475569; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
@@ -38,12 +47,23 @@
 
   <h2>Executive summary</h2>
   <section class="grid">
-    <div class="card"><span class="muted">Security score</span><strong class="score">{{ report.score }}/100</strong></div>
+    <div class="card"><div class="score-ring"><strong>{{ report.score }}/100</strong></div></div>
     <div class="card"><span class="muted">Risk level</span><strong class="risk-{{ report.risk_level }}">{{ report.risk_level }}</strong></div>
     <div class="card"><span class="muted">Critical</span><strong class="critical">{{ counts.critical }}</strong></div>
     <div class="card"><span class="muted">High</span><strong class="high">{{ counts.high }}</strong></div>
     <div class="card"><span class="muted">Module warnings</span><strong>{{ module_errors }}</strong></div>
     <div class="card"><span class="muted">Previous score</span><strong>{{ report.previous_score if report.previous_score is not none else "—" }}</strong></div>
+    <div class="card"><span class="muted">Incident assessment</span><strong style="font-size:17px">{{ report.metadata.incident_assessment.status }}</strong></div>
+  </section>
+  <section class="panel"><strong>{{ report.metadata.incident_assessment.conclusion }}</strong>
+    <br><span class="muted">{{ report.metadata.incident_assessment.disclaimer }}</span></section>
+
+  <h2>Main concerns</h2>
+  <section class="panel">
+    {% set concerns = report.findings | selectattr("risk_score", "gt", 0) | list %}
+    {% if concerns %}
+      <ol>{% for finding in concerns[:5] %}<li><strong>{{ finding.title }}</strong> — risk {{ finding.risk_score }}/100, confidence {{ finding.confidence }}%</li>{% endfor %}</ol>
+    {% else %}<p>No material concerns were identified.</p>{% endif %}
   </section>
 
   <h2>Priority recommendations</h2>
@@ -54,18 +74,85 @@
     {% else %}<p>No critical or high findings were produced by this scan.</p>{% endif %}
   </section>
 
+  {% for module in report.module_results if module.name == "ssh" %}
+  <h2>SSH security analysis</h2>
+  <section class="panel">
+    {% if module.data.security_status is defined %}
+    <div class="grid">
+      <div class="card"><span class="muted">Root login</span><strong style="font-size:18px">{{ module.data.security_status.root_login }}</strong></div>
+      <div class="card"><span class="muted">Password login</span><strong style="font-size:18px">{{ module.data.security_status.password_login }}</strong></div>
+      <div class="card"><span class="muted">Authorized keys</span><strong style="font-size:18px">{{ module.data.security_status.ssh_keys }}</strong></div>
+      <div class="card"><span class="muted">SSH port</span><strong>{{ module.data.security_status.port }}</strong></div>
+      <div class="card"><span class="muted">Failed attempts</span><strong>{{ module.data.attack_summary.failed_login_attempts }}</strong></div>
+      <div class="card"><span class="muted">Attacking IPs</span><strong>{{ module.data.attack_summary.unique_attacking_ips }}</strong></div>
+    </div>
+    {% if module.data.attack_summary.top_attackers %}
+    <table><thead><tr><th>Source IP</th><th>Attempts</th><th>Country</th><th>Targeted users</th></tr></thead><tbody>
+    {% for attacker in module.data.attack_summary.top_attackers %}
+      <tr><td>{{ attacker.ip }}</td><td>{{ attacker.count }}</td><td>{{ attacker.country }}</td><td>{{ attacker.usernames | join(", ") }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+    {% endif %}
+    {% else %}<p>SSH evidence was unavailable.</p>{% endif %}
+  </section>
+  {% endfor %}
+
+  {% for module in report.module_results if module.name == "network" %}
+  <h2>Port exposure audit</h2>
+  <section class="panel">
+    {% if module.data.listening_ports %}
+    <table><thead><tr><th>Port</th><th>Service</th><th>Process owner</th><th>Exposure</th><th>Encryption</th><th>Firewall</th></tr></thead><tbody>
+    {% for port in module.data.listening_ports %}
+      <tr><td>{{ port.protocol }}/{{ port.port }}</td><td>{{ port.service }}</td><td>{{ port.user or "unresolved" }}{% if port.pid %} (PID {{ port.pid }}){% endif %}</td>
+        <td><span class="badge {{ "high" if port.exposure == "PUBLIC" else "info" }}">{{ port.exposure }}</span></td>
+        <td>{{ port.encrypted }}</td><td>{{ port.firewall_status }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+    {% else %}<p>No listening socket evidence was available.</p>{% endif %}
+  </section>
+  {% endfor %}
+
+  {% for module in report.module_results if module.name == "process" %}
+  <h2>Process investigation</h2>
+  <section class="panel">
+    {% if module.data.investigations %}
+    {% for process in module.data.investigations %}
+    <details open>
+      <summary><span class="badge {{ process.severity }}">{{ process.severity }}</span>
+        PID {{ process.pid }} — {{ process.name }} — risk {{ process.risk_score }}/100 ({{ process.confidence }}%)</summary>
+      <table><tbody>
+        <tr><th>User / parent</th><td>{{ process.user }} / {{ process.ppid }}</td><th>Started</th><td>{{ process.start_time }}</td></tr>
+        <tr><th>Command</th><td colspan="3"><pre>{{ process.command }}</pre></td></tr>
+        <tr><th>Executable</th><td>{{ process.executable }}</td><th>Working directory</th><td>{{ process.working_directory }}</td></tr>
+        <tr><th>Package</th><td>{{ process.package_owner or "unresolved" }}</td><th>Systemd</th><td>{{ process.systemd_unit or "none" }}</td></tr>
+        <tr><th>Open ports</th><td colspan="3"><pre>{{ process.open_ports | tojson(indent=2) }}</pre></td></tr>
+        <tr><th>Connections</th><td colspan="3"><pre>{{ process.network_connections | tojson(indent=2) }}</pre></td></tr>
+        <tr><th>Parent tree</th><td colspan="3"><pre>{{ process.parent_tree | tojson(indent=2) }}</pre></td></tr>
+        <tr><th>Assessment</th><td colspan="3">{{ process.reason }}</td></tr>
+      </tbody></table>
+    </details>
+    {% endfor %}
+    {% else %}<p>No process met the contextual investigation threshold.</p>{% endif %}
+  </section>
+  {% endfor %}
+
   <h2>Findings</h2>
   <section class="panel">
     {% if report.findings %}
     <table>
-      <thead><tr><th>Risk</th><th>Finding</th><th>Evidence</th><th>Recommendation</th></tr></thead>
+      <thead><tr><th>Severity</th><th>Risk / confidence</th><th>Finding</th><th>Evidence</th><th>Remediation</th></tr></thead>
       <tbody>
       {% for finding in report.findings %}
         <tr>
           <td><span class="badge {{ finding.severity.value }}">{{ finding.severity.value }}</span></td>
-          <td><span class="finding-title">{{ finding.title }}</span><br><span class="muted">{{ finding.category }} · {{ finding.finding_id }}</span><br>{{ finding.description }}</td>
+          <td><strong>{{ finding.risk_score }}/100</strong><br><span class="muted">{{ finding.confidence }}% confidence</span></td>
+          <td><span class="finding-title">{{ finding.title }}</span><br><span class="muted">{{ finding.category }} · {{ finding.finding_id }}</span>
+            <br><strong>What happened:</strong> {{ finding.description }}
+            <br><strong>Why it matters:</strong> {{ finding.reason or finding.description }}</td>
           <td><pre>{{ finding.evidence }}</pre></td>
-          <td class="recommendation">{{ finding.recommendation }}</td>
+          <td class="recommendation"><strong>How to fix:</strong> {{ finding.recommendation }}
+            {% if finding.remediation_commands %}<pre>{% for command in finding.remediation_commands %}{{ command }}
+{% endfor %}</pre><span class="muted">Suggested commands are never executed by the auditor.</span>{% endif %}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -76,7 +163,7 @@
   <h2>Historical comparison</h2>
   <section class="panel">
     {% if report.changes %}
-      <ul>{% for change in report.changes %}<li><span class="badge {{ change.severity }}">{{ change.type }}</span> {{ change.description }}</li>{% endfor %}</ul>
+      <ul class="timeline">{% for change in report.changes %}<li><span class="badge {{ change.severity }}">{{ change.type }}</span> {{ change.description }}</li>{% endfor %}</ul>
     {% else %}<p>No tracked changes since the previous scan.</p>{% endif %}
   </section>
 

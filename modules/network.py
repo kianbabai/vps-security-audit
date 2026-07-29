@@ -4,10 +4,32 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from audit_context import AuditContext
 from models import Finding, ModuleResult, Severity
+
+KNOWN_SERVICES = {
+    21: ("ftp", False),
+    22: ("ssh", True),
+    23: ("telnet", False),
+    25: ("smtp", False),
+    53: ("dns", None),
+    80: ("http", False),
+    110: ("pop3", False),
+    143: ("imap", False),
+    443: ("https", True),
+    465: ("smtps", True),
+    587: ("smtp-submission", None),
+    993: ("imaps", True),
+    995: ("pop3s", True),
+    3306: ("mysql", False),
+    5432: ("postgresql", False),
+    6379: ("redis", False),
+    9200: ("elasticsearch", False),
+    27017: ("mongodb", False),
+}
 
 
 def audit(context: AuditContext) -> ModuleResult:
@@ -24,6 +46,7 @@ def audit(context: AuditContext) -> ModuleResult:
     dangerous = {int(port) for port in config["dangerous_ports"]}
     expected = {int(port) for port in config["expected_public_ports"]}
     for item in sockets:
+        item.update(_enrich_socket(context, item))
         if not item["public_access"] or item["port"] is None:
             continue
         port = item["port"]
@@ -37,6 +60,16 @@ def audit(context: AuditContext) -> ModuleResult:
                     "A commonly abused database, remote-control, or legacy service is bound to all interfaces.",
                     f"{item['protocol']} {item['local_address']} process={item['process'] or 'unknown'}",
                     "Bind the service to a private interface and restrict it with the firewall.",
+                    risk_score=38,
+                    confidence=90,
+                    reason=(
+                        "The service uses a port commonly associated with databases, legacy protocols, "
+                        "or unauthenticated control APIs and listens on all interfaces."
+                    ),
+                    remediation_commands=[
+                        f"sudo ss -lntup '( sport = :{port} )'",
+                        "sudo ufw status verbose",
+                    ],
                 )
             )
         elif port not in expected:
@@ -49,6 +82,16 @@ def audit(context: AuditContext) -> ModuleResult:
                     "The port is not in the configured expected public-port allowlist.",
                     f"{item['protocol']} {item['local_address']} process={item['process'] or 'unknown'}",
                     "Confirm the service is required and restrict its source networks or bind address.",
+                    risk_score=22,
+                    confidence=80 if item["pid"] else 65,
+                    reason=(
+                        "A service outside the approved public-port policy is reachable on a wildcard bind; "
+                        "firewall reachability still requires explicit rule validation."
+                    ),
+                    remediation_commands=[
+                        f"sudo ss -lntup '( sport = :{port} )'",
+                        f"sudo ps -fp {item['pid']}" if item["pid"] else "sudo ss -lntup",
+                    ],
                 )
             )
 
@@ -58,7 +101,8 @@ def audit(context: AuditContext) -> ModuleResult:
         for line in active.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 5:
-                remote_counts[_host_from_endpoint(parts[4])] += 1
+                remote_index = 5 if len(parts) > 5 and parts[1].upper() in {"ESTAB", "ESTABLISHED"} else 4
+                remote_counts[_host_from_endpoint(parts[remote_index])] += 1
     context.snapshots["ports"] = sorted(
         f"{item['protocol']}/{item['port']}" for item in sockets if item["port"] is not None
     )
@@ -89,6 +133,7 @@ def _parse_socket(line: str) -> dict[str, Any] | None:
         "port": port,
         "public_access": host in {"0.0.0.0", "::", "*", "[::]"},
         "process": process_match.group(1) if process_match else None,
+        "pid": _pid(parts[6] if len(parts) > 6 else ""),
     }
 
 
@@ -126,6 +171,7 @@ def _parse_netstat(line: str) -> dict[str, Any] | None:
         "port": port,
         "public_access": host in {"0.0.0.0", "::", "*", "[::]"},
         "process": process,
+        "pid": _pid(process_value),
     }
 
 
@@ -143,6 +189,7 @@ def _parse_lsof(line: str) -> dict[str, Any] | None:
         "port": port,
         "public_access": host in {"0.0.0.0", "::", "*", "[::]"},
         "process": parts[0],
+        "pid": int(parts[1]) if parts[1].isdigit() else None,
     }
 
 
@@ -163,3 +210,52 @@ def _split_endpoint(endpoint: str) -> tuple[str, int | None]:
 
 def _host_from_endpoint(endpoint: str) -> str:
     return _split_endpoint(endpoint)[0]
+
+
+def _pid(value: str) -> int | None:
+    match = re.search(r"(?:pid=|^)(\d+)", value)
+    return int(match.group(1)) if match else None
+
+
+def _enrich_socket(context: AuditContext, item: dict[str, Any]) -> dict[str, Any]:
+    port = item.get("port")
+    known = KNOWN_SERVICES.get(port, (None, None))
+    pid = item.get("pid")
+    user = None
+    executable = None
+    if pid:
+        user_result = context.run(["ps", "-o", "user=", "-p", str(pid)], timeout=3)
+        user = user_result.stdout.strip() or None if user_result.ok else None
+        try:
+            executable = str(Path(f"/proc/{pid}/exe").readlink())
+        except OSError:
+            executable = None
+    host = item.get("bind_address")
+    if item.get("public_access"):
+        exposure = "PUBLIC"
+    elif host in {"127.0.0.1", "::1", "[::1]", "localhost"}:
+        exposure = "LOCAL"
+    else:
+        exposure = "INTERFACE_BOUND"
+    encrypted = (
+        "LIKELY_BY_STANDARD_PORT_NOT_VERIFIED"
+        if known[1] is True
+        else "PLAINTEXT_BY_PROTOCOL_DEFAULT"
+        if known[1] is False
+        else "UNKNOWN"
+    )
+    firewall = context.snapshots.get("firewall", {})
+    firewall_status = (
+        f"ACTIVE ({firewall.get('backend')}); exact rule requires validation"
+        if firewall.get("enabled")
+        else "NOT VERIFIED"
+    )
+    return {
+        "service": item.get("process") or known[0] or "unknown",
+        "user": user,
+        "executable": executable,
+        "exposure": exposure,
+        "encrypted": encrypted,
+        "known_service": known[0],
+        "firewall_status": firewall_status,
+    }

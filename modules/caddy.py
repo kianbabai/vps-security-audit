@@ -7,6 +7,7 @@ from typing import Any
 
 from analyzers.suspicious_activity import parse_access_lines
 from audit_context import AuditContext
+from geoip_lookup import countries_for_ips
 from models import Finding, ModuleResult, Severity
 
 
@@ -87,8 +88,8 @@ def audit(context: AuditContext) -> ModuleResult:
 
     lines = _log_lines(context, config["access_log_paths"], errors)
     activity, activity_findings = parse_access_lines(lines, int(config["request_threshold_per_ip"]))
-    activity["country_by_ip"] = _geoip_countries(
-        activity["top_ips"], context.config.get("privacy", {}).get("geoip_database"), errors
+    activity["country_by_ip"] = countries_for_ips(
+        list(activity["top_ips"]), context.config.get("privacy", {}).get("geoip_database"), errors
     )
     findings.extend(activity_findings)
     if not configs:
@@ -109,27 +110,3 @@ def _log_lines(context: AuditContext, paths: list[str], errors: list[str]) -> li
         elif error:
             errors.append(f"Cannot read {path}: {error}")
     return lines[-limit:]
-
-
-def _geoip_countries(ips: dict[str, int], database: str | None, errors: list[str]) -> dict[str, str]:
-    if not database:
-        return {}
-    path = Path(database)
-    if not path.is_file():
-        errors.append(f"Configured GeoIP database does not exist: {path}")
-        return {}
-    try:
-        import geoip2.database
-
-        countries: dict[str, str] = {}
-        with geoip2.database.Reader(str(path)) as reader:
-            for ip in ips:
-                try:
-                    response = reader.country(ip)
-                    countries[ip] = response.country.iso_code or response.country.name or "unknown"
-                except Exception:
-                    continue
-        return countries
-    except (ImportError, OSError) as exc:
-        errors.append(f"GeoIP enrichment unavailable: {exc}")
-        return {}

@@ -24,12 +24,14 @@ def analyze_auth_lines(
     distributed_threshold: int,
     unusual_start: int,
     unusual_end: int,
+    success_after_failure_threshold: int = 5,
 ) -> tuple[dict[str, Any], list[Finding]]:
     failures: Counter[str] = Counter()
     targeted_users: dict[str, Counter[str]] = defaultdict(Counter)
     invalid_users: Counter[str] = Counter()
     successes: list[dict[str, str]] = []
     unusual: list[dict[str, str]] = []
+    success_after_failures: list[dict[str, Any]] = []
 
     for line in lines:
         failed = FAILED_RE.search(line) or INVALID_RE.search(line)
@@ -48,6 +50,9 @@ def analyze_auth_lines(
                 "date": _timestamp(line),
             }
             successes.append(item)
+            prior_failures = failures[item["ip"]]
+            if prior_failures:
+                success_after_failures.append({**item, "prior_failures": prior_failures})
             hour = _hour(line)
             if hour is not None and _within_hour_window(hour, unusual_start, unusual_end):
                 unusual.append(item)
@@ -64,8 +69,15 @@ def analyze_auth_lines(
                 "ssh",
                 f"{len(offenders)} source IP(s) exceeded the configured failure threshold.",
                 ", ".join(f"{ip}: {count}" for ip, count in top),
-                "Restrict SSH exposure, require key authentication, and investigate the source addresses.",
+                "Disable password authentication, restrict SSH exposure, enable Fail2ban or equivalent rate limiting, and investigate the source addresses.",
                 {"source_counts": dict(top)},
+                risk_score=32,
+                confidence=95,
+                reason="Repeated authentication failures above the configured threshold are strong evidence of an active password attack.",
+                remediation_commands=[
+                    "sudo sshd -T | grep -E 'passwordauthentication|permitrootlogin'",
+                    "sudo fail2ban-client status sshd",
+                ],
             )
         )
     if len(failures) >= distributed_threshold and sum(failures.values()) >= distributed_threshold:
@@ -85,14 +97,41 @@ def analyze_auth_lines(
             Finding(
                 "ssh.unusual_login_time",
                 "Successful SSH login at an unusual hour",
-                Severity.MEDIUM,
+                Severity.LOW,
                 "ssh",
                 "One or more successful logins occurred inside the configured unusual-hours window.",
                 "; ".join(f"{x['user']} from {x['ip']} at {x['date']}" for x in unusual[-10:]),
                 "Validate these logins against administrator activity and rotate credentials if unrecognized.",
+                risk_score=5,
+                confidence=50,
+                reason="Login time is a weak behavioral signal and is not suspicious without user or source context.",
+            )
+        )
+    suspicious_successes = [
+        item for item in success_after_failures if item["prior_failures"] >= success_after_failure_threshold
+    ]
+    if suspicious_successes:
+        findings.append(
+            Finding(
+                "ssh.success_after_failures",
+                "Successful SSH authentication followed earlier failures",
+                Severity.HIGH,
+                "ssh",
+                "A source address that generated failed authentication attempts later logged in successfully.",
+                "; ".join(
+                    f"{x['user']} from {x['ip']} after {x['prior_failures']} failures"
+                    for x in suspicious_successes[-20:]
+                ),
+                "Immediately validate the successful sessions and rotate affected credentials if any login is unrecognized.",
+                risk_score=32,
+                confidence=80,
+                reason="A success following repeated failures can indicate a guessed password or stolen credential.",
             )
         )
 
+    targeted_totals: Counter[str] = Counter()
+    for values in targeted_users.values():
+        targeted_totals.update(values)
     data = {
         "failed_by_ip": [
             {"ip": ip, "count": count, "usernames": dict(targeted_users[ip].most_common(10))}
@@ -100,6 +139,8 @@ def analyze_auth_lines(
         ],
         "successful_logins": successes[-100:],
         "suspicious_usernames": dict(invalid_users.most_common(30)),
+        "targeted_usernames": dict(targeted_totals.most_common(30)),
+        "successful_after_failures": success_after_failures[-100:],
         "total_failures": sum(failures.values()),
         "distinct_failure_ips": len(failures),
     }

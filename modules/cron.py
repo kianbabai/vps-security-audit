@@ -77,4 +77,10 @@ def _sanitize(line: str) -> str:
         r"\1=[REDACTED]",
         line,
     )
-    return re.sub(r"(?i)([?&](?:token|key|secret|password)=)[^&\s]+", r"\1[REDACTED]", value)
+    value = re.sub(
+        r"(?i)(--?(?:password|passwd|token|secret|api[-_]?key|private[-_]?key))\s+\S+",
+        r"\1 [REDACTED]",
+        value,
+    )
+    value = re.sub(r"(?i)([?&](?:token|key|secret|password)=)[^&\s]+", r"\1[REDACTED]", value)
+    return re.sub(r"(https?://[^:/\s]+:)[^@\s]+@", r"\1[REDACTED]@", value)

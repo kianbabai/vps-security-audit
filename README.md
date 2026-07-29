@@ -1,6 +1,6 @@
 # VPS Security Audit
 
-A report-only security auditor for Ubuntu/Debian VPS hosts running Docker, Caddy, and WordPress. It inventories the host, analyzes authentication and web activity, checks common configuration risks, compares file hashes and infrastructure state with the prior scan, and produces standalone HTML and JSON reports.
+A report-only security and incident-analysis tool for Ubuntu/Debian VPS hosts running Docker, Caddy, Nginx, Apache, and WordPress. It combines configuration checks with process context, network ownership, authentication attack sequences, persistence, file integrity, and historical state to answer both “what is misconfigured?” and “are there indicators of compromise?”
 
 The auditor **does not** change firewall rules, accounts, services, containers, scheduled jobs, or application files. Its only writes are the configured report directory and `database/history.json`.
 
@@ -9,14 +9,17 @@ The auditor **does not** change firewall rules, accounts, services, containers, 
 - Host identity, OS, kernel, uptime, CPU, memory, disks, public IP, and installed packages
 - Effective OpenSSH policy, successful/failed logins, brute force patterns, unusual-hour logins, and authorized-key fingerprints
 - Local users, UID 0 accounts, administrative groups, and service accounts with interactive shells
-- Public listeners, established connections, dangerous ports, and unexpected exposed services
+- Password state, recent account creation, inactive administrators, sudo access, and login history
+- Public listeners, owning PID/user/executable, encryption expectation, established connections, dangerous ports, and unexpected exposed services
 - UFW, nftables, or iptables status and broad allow rules
 - Docker daemon access, containers, images, privileged/root containers, namespace sharing, capabilities, mounts, and published ports
 - Caddy TLS/admin/header configuration and scanner/request-volume patterns in JSON or combined access logs
+- Nginx, Apache, and Caddy detection with scanner, bot, SQL-injection, and path-traversal analysis
 - WordPress permissions, installed plugin/theme names, executable uploads, login attacks, and XML-RPC abuse
 - SHA-256 integrity state for security-sensitive configuration and Compose files
 - System/user cron entries and suspicious persistence/download patterns
-- High-CPU processes, known miner names, transient executables, and deleted executables
+- Context-aware process investigation including PID/PPID, user, command, executable, working directory, start time, sockets, connections, parent tree, package ownership, and systemd ownership
+- Custom/enabled systemd services and suspicious `.bashrc`, `.profile`, `rc.local`, and system-wide startup persistence
 - Historical changes in users, ports, containers, SSH source IPs, SSH keys, and tracked file hashes
 
 ## Install
@@ -50,6 +53,15 @@ sudo .venv/bin/python main.py --config /etc/vps-security-audit.yaml
 sudo .venv/bin/python main.py --output-dir /secure/audit-reports --no-history
 ```
 
+The included launcher provides the shorter command form requested by the baseline workflow:
+
+```bash
+chmod 0750 vps-audit
+sudo ./vps-audit scan
+sudo ./vps-audit baseline create
+sudo ./vps-audit baseline compare
+```
+
 Reports are written with mode `0600` under `reports/output/` by default:
 
 ```text
@@ -59,21 +71,38 @@ security-report-YYYY-MM-DD-HHMMSS.json
 
 Collection failures are recorded as module warnings and do not stop other modules. A non-root run is supported but will normally have gaps in authentication, firewall, Docker, process, shadow-file, and user-cron evidence.
 
-## Risk model
+## Risk and confidence model
 
-The score starts at 100 and subtracts 20 points for each critical finding, 10 for high, 5 for medium, and 2 for low. It is clamped at zero.
+Every finding includes a 0–100 risk score, 0–100 confidence, severity, evidence, contextual reasoning, recommendation, and optional remediation commands. Commands are displayed only and are never executed.
+
+The overall score starts at 100. Finding risk is multiplied by confidence, then combined with diminishing weight inside each category. This prevents many variants of the same weak signal from overwhelming the host score. Category penalties are capped before the final score is clamped to 0–100.
 
 | Score | Reported risk level |
 |---:|---|
 | 0–39 | `CRITICAL` |
-| 40–69 | `WARNING` |
-| 70–100 | `GOOD` |
+| 40–59 | `HIGH` |
+| 60–79 | `MEDIUM` |
+| 80–89 | `LOW` |
+| 90–100 | `HEALTHY` |
 
-Findings are independent signals, not proof of compromise. Validate evidence in operational context before remediation.
+The report also produces an incident assessment: `NO_DIRECT_INDICATORS`, `POSSIBLE_COMPROMISE`, or `STRONG_INDICATORS`. Findings are still not proof of compromise; absence of indicators is not proof that a host is clean.
+
+### Deleted executables
+
+`(deleted)` is not treated as malware by itself. The process engine lowers risk when the executable is under a standard system path, belongs to an installed package, descends from systemd, or belongs to a standard unit. It raises risk for transient or hidden paths, root execution, unknown ancestry, public listeners, network connections, and custom persistence.
 
 ## Historical tracking
 
-`database/history.json` stores bounded scan summaries and snapshots, not full reports or SSH public-key contents. The default retention is 90 scans. On the first run, the tool creates a baseline. Subsequent scans report additions/removals and tracked file changes. Running a subset of modules preserves snapshot fields owned by modules that were not run.
+`database/history.json` stores bounded scan summaries and snapshots, not full reports or SSH public-key contents. The default retention is 90 scans. Normal scans compare with the immediately previous scan. Running a subset of modules preserves snapshot fields owned by modules that were not run.
+
+Explicit baseline mode stores a stable reference in `database/baseline.json`:
+
+```bash
+sudo ./vps-audit baseline create
+sudo ./vps-audit baseline compare
+```
+
+Creating a baseline replaces only the dedicated baseline file; it does not change the server. Comparing never updates the baseline. Both runtime files are excluded by `.gitignore` because they can reveal host inventory.
 
 Back up or integrity-protect the history file if it is used as a security control. Keep it outside a web-served directory.
 
@@ -108,6 +137,7 @@ Test on a staging VPS before scheduling it in production. Large logs are read fr
 - Authorized keys are recorded as SHA-256 fingerprints; key material is not stored.
 - Caddy/SSH log parsing is heuristic and respects `audit.max_log_lines`.
 - “Outdated Docker images” cannot be established safely without contacting registries or pulling metadata. This auditor reports image identifiers and mutable `latest` tags; use a separate authenticated image-scanning pipeline for authoritative CVE and freshness data.
+- There is intentionally no `--fix` mode. Suggested commands appear as remediation guidance, but every supported invocation remains read-only with respect to host configuration and services.
 - GeoIP is only inferred when `privacy.geoip_database` points to a local trusted database; no address is sent to a GeoIP web service.
 
 ## Layout
@@ -120,7 +150,7 @@ models.py                typed report and finding model
 modules/                 individual host/service collectors
 analyzers/               auth/web activity and risk/history engines
 reports/                 HTML generator and template
-database/history.json    initial historical baseline store
+database/                runtime history and explicit baseline store
 deployment/              example systemd service and timer
 tests/                   unit tests
 ```

@@ -4,18 +4,49 @@ from __future__ import annotations
 
 from typing import Any
 
-from models import Finding, PENALTIES
+from collections import defaultdict
+
+from models import Finding
 
 
 def calculate_score(findings: list[Finding]) -> tuple[int, str]:
-    score = max(0, 100 - sum(PENALTIES[finding.severity] for finding in findings))
+    """Confidence-weighted scoring with diminishing returns per category.
+
+    Repeated variants of the same problem should matter, but should not let a
+    noisy collector dominate the entire host score.
+    """
+    categories: dict[str, list[float]] = defaultdict(list)
+    for finding in findings:
+        if finding.risk_score is None:
+            continue
+        categories[finding.category].append(finding.risk_score * finding.confidence / 100)
+
+    penalty = 0.0
+    for contributions in categories.values():
+        ordered = sorted(contributions, reverse=True)
+        if not ordered:
+            continue
+        category_penalty = ordered[0]
+        if len(ordered) > 1:
+            category_penalty += ordered[1] * 0.50
+        if len(ordered) > 2:
+            category_penalty += sum(ordered[2:]) * 0.25
+        penalty += min(35.0, category_penalty)
+
+    score = max(0, min(100, round(100 - penalty)))
+    return score, risk_level(score)
+
+
+def risk_level(score: int) -> str:
     if score < 40:
-        level = "CRITICAL"
-    elif score < 70:
-        level = "WARNING"
-    else:
-        level = "GOOD"
-    return score, level
+        return "CRITICAL"
+    if score < 60:
+        return "HIGH"
+    if score < 80:
+        return "MEDIUM"
+    if score < 90:
+        return "LOW"
+    return "HEALTHY"
 
 
 def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) -> list[dict[str, Any]]:
@@ -27,6 +58,7 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
     _set_changes(changes, "ports", old.get("ports", []), current.get("ports", []), "listening port")
     _set_changes(changes, "containers", old.get("containers", []), current.get("containers", []), "container")
     _set_changes(changes, "ssh_ips", old.get("ssh_ips", []), current.get("ssh_ips", []), "SSH source IP")
+    _set_changes(changes, "persistence", old.get("persistence", []), current.get("persistence", []), "persistence item")
 
     old_hashes = old.get("file_hashes", {})
     new_hashes = current.get("file_hashes", {})
@@ -69,4 +101,3 @@ def _set_changes(
                 "description": f"Removed {label}: {value}",
             }
         )
-

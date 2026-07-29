@@ -54,4 +54,5 @@ def audit(context: AuditContext) -> ModuleResult:
                 "Review broad rules and constrain source ranges where operationally possible.",
             )
         )
+    context.snapshots["firewall"] = {"enabled": bool(data["enabled"]), "backend": data["backend"]}
     return ModuleResult("firewall", data, findings, errors)

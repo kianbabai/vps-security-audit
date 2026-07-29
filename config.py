@@ -55,7 +55,7 @@ def _validate(config: dict[str, Any]) -> None:
         value = audit.get(key)
         if not isinstance(value, int) or value <= 0:
             raise ConfigError(f"audit.{key} must be a positive integer")
-    for key in ("report_directory", "history_file"):
+    for key in ("report_directory", "history_file", "baseline_file"):
         if not isinstance(audit.get(key), str) or not audit[key].strip():
             raise ConfigError(f"audit.{key} must be a non-empty path")
     system = config.get("system", {})
@@ -66,9 +66,16 @@ def _validate(config: dict[str, Any]) -> None:
     if warning >= critical:
         raise ConfigError("system.disk_warning_percent must be lower than disk_critical_percent")
     ssh = config.get("ssh", {})
+    for key in ("failed_login_threshold", "distributed_attack_threshold", "success_after_failure_threshold"):
+        if not isinstance(ssh.get(key), int) or ssh[key] <= 0:
+            raise ConfigError(f"ssh.{key} must be a positive integer")
     for key in ("unusual_login_start_hour", "unusual_login_end_hour"):
         if not isinstance(ssh.get(key), int) or not 0 <= ssh[key] <= 23:
             raise ConfigError(f"ssh.{key} must be an integer from 0 through 23")
+    users = config.get("users", {})
+    for key in ("inactive_days", "recent_account_days"):
+        if not isinstance(users.get(key), int) or users[key] <= 0:
+            raise ConfigError(f"users.{key} must be a positive integer")
 
 
 def project_path(config: dict[str, Any], configured_path: str) -> Path:

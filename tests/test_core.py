@@ -11,6 +11,7 @@ from config import load_config
 from history import load_history, save_history
 from modules.cron import _sanitize
 from modules.network import _parse_socket
+from main import parse_args
 
 
 class ConfigTests(unittest.TestCase):
@@ -25,6 +26,11 @@ class ConfigTests(unittest.TestCase):
             config = load_config(path)
             self.assertEqual(config["system"]["disk_warning_percent"], 70)
             self.assertIn("history_file", config["audit"])
+
+    def test_baseline_cli(self) -> None:
+        args = parse_args(["baseline", "create"])
+        self.assertEqual(args.command, "baseline")
+        self.assertEqual(args.baseline_action, "create")
 
 
 class HistoryTests(unittest.TestCase):
@@ -48,10 +54,15 @@ class CollectionSafetyTests(unittest.TestCase):
             self.assertEqual(lines, ["line-97", "line-98", "line-99"])
 
     def test_cron_secret_redaction(self) -> None:
-        value = _sanitize("API_TOKEN=supersecret curl 'https://example.test/?token=abc123'")
+        value = _sanitize(
+            "API_TOKEN=supersecret command --password hidden "
+            "curl 'https://user:basicpass@example.test/?token=abc123'"
+        )
         self.assertNotIn("supersecret", value)
+        self.assertNotIn(" hidden", value)
+        self.assertNotIn("basicpass", value)
         self.assertNotIn("abc123", value)
-        self.assertEqual(value.count("[REDACTED]"), 2)
+        self.assertEqual(value.count("[REDACTED]"), 4)
 
 
 class NetworkParserTests(unittest.TestCase):

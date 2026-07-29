@@ -19,6 +19,16 @@ def load_history(path: Path) -> list[dict[str, Any]]:
     return value if isinstance(value, list) else []
 
 
+def load_object(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def save_history(path: Path, history: list[dict[str, Any]], limit: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_json(path, history[-limit:])
@@ -44,4 +54,3 @@ def _atomic_json(path: Path, value: Any) -> None:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
-
