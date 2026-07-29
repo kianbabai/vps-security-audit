@@ -1,0 +1,103 @@
+audit:
+  command_timeout_seconds: 15
+  max_output_bytes: 1048576
+  max_log_lines: 50000
+  report_directory: reports/output
+  history_file: database/history.json
+  history_limit: 90
+  include_package_list: true
+
+privacy:
+  geoip_database: null
+
+system:
+  public_ip_lookup: true
+  public_ip_url: https://api.ipify.org
+  disk_warning_percent: 85
+  disk_critical_percent: 95
+
+ssh:
+  config_path: /etc/ssh/sshd_config
+  auth_log_paths:
+    - /var/log/auth.log
+    - /var/log/secure
+  failed_login_threshold: 10
+  distributed_attack_threshold: 20
+  unusual_login_start_hour: 0
+  unusual_login_end_hour: 5
+  authorized_keys_globs:
+    - /root/.ssh/authorized_keys
+    - /home/*/.ssh/authorized_keys
+
+network:
+  dangerous_ports: [21, 23, 111, 139, 445, 2375, 3306, 5432, 6379, 9200, 11211, 27017]
+  expected_public_ports: [22, 80, 443]
+
+firewall:
+  required: true
+
+docker:
+  enabled: true
+  socket_path: /var/run/docker.sock
+  compose_globs:
+    - /opt/**/compose.y*ml
+    - /srv/**/compose.y*ml
+    - /home/*/**/compose.y*ml
+
+caddy:
+  cloudflare_expected: true
+  config_paths:
+    - /etc/caddy/Caddyfile
+    - /srv/proxy/Caddyfile
+  access_log_paths:
+    - /var/log/caddy/access.log
+    - /srv/proxy/logs/access.log
+  request_threshold_per_ip: 500
+
+wordpress:
+  roots:
+    - /var/www/html
+    - /srv/wordpress
+  access_log_paths:
+    - /var/log/caddy/access.log
+    - /srv/proxy/logs/access.log
+  login_attack_threshold: 20
+
+filesystem:
+  tracked_paths:
+    - /etc/passwd
+    - /etc/shadow
+    - /etc/ssh/sshd_config
+    - /etc/sudoers
+    - /etc/caddy/Caddyfile
+  tracked_globs:
+    - /etc/sudoers.d/*
+    - /opt/**/compose.y*ml
+    - /srv/**/compose.y*ml
+  max_file_size_bytes: 10485760
+
+cron:
+  paths:
+    - /etc/crontab
+    - /etc/cron.d
+    - /etc/cron.daily
+    - /etc/cron.hourly
+    - /etc/cron.weekly
+    - /var/spool/cron
+    - /var/spool/cron/crontabs
+  suspicious_patterns:
+    - "curl *|*sh"
+    - "wget *|*sh"
+    - "/tmp/"
+    - "/dev/shm/"
+    - "base64 *-d"
+    - "nc *-e"
+
+malware:
+  high_cpu_percent: 80
+  suspicious_process_names:
+    - xmrig
+    - minerd
+    - kinsing
+    - kdevtmpfsi
+    - cryptominer

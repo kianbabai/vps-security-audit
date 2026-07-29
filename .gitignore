@@ -1,0 +1,53 @@
+# Python runtime and tooling
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated audit reports
+reports/output/*
+!reports/output/.gitkeep
+reports/test-output/
+security-report-*.html
+security-report-*.json
+vps-audit-report-*.txt
+
+# Runtime audit state (contains hostnames, IPs, users, ports, and hashes)
+database/history.json
+
+# Local and production-specific configuration
+config.local.yaml
+config.production.yaml
+config.override.yaml
+.env
+.env.*
+!.env.example
+
+# Private keys, certificates with private material, and credential exports
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+authorized_keys
+*credentials*.json
+service-account*.json
+
+# Local GeoIP databases
+*.mmdb
+
+# Local databases, logs, backups, and temporary files
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.bak
+*.swp
+*~
+*.tmp

@@ -1,0 +1,21 @@
+[Unit]
+Description=Read-only VPS security audit
+After=docker.service caddy.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/vps-security-audit
+ExecStart=/opt/vps-security-audit/.venv/bin/python /opt/vps-security-audit/main.py
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/opt/vps-security-audit/reports/output /opt/vps-security-audit/database
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=15min
+

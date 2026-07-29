@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>VPS Security Audit — {{ report.hostname }}</title>
+  <style>
+    :root { color-scheme: light; --bg:#f4f7fb; --panel:#fff; --text:#172033; --muted:#64748b;
+      --critical:#991b1b; --high:#dc2626; --medium:#d97706; --low:#2563eb; --info:#64748b; --good:#15803d; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 system-ui,-apple-system,Segoe UI,sans-serif; }
+    main { width:min(1180px,calc(100% - 32px)); margin:32px auto 64px; }
+    h1,h2,h3 { line-height:1.2; margin:0 0 12px; } h1 { font-size:28px; } h2 { margin-top:30px; }
+    .muted { color:var(--muted); } .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; }
+    .card,.panel { background:var(--panel); border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 3px 14px #0f172a0b; }
+    .card { padding:18px; } .card strong { display:block; font-size:28px; margin-top:4px; }
+    .panel { padding:20px; margin-top:14px; overflow:auto; }
+    .score,.risk-GOOD { color:var(--good); } .risk-CRITICAL,.critical { color:var(--critical); }
+    .risk-WARNING,.high { color:var(--high); } .medium { color:var(--medium); } .low { color:var(--low); }
+    table { width:100%; border-collapse:collapse; min-width:760px; }
+    th,td { padding:11px 10px; text-align:left; border-bottom:1px solid #e2e8f0; vertical-align:top; }
+    th { color:#475569; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .badge { display:inline-block; border-radius:999px; padding:2px 9px; font-weight:700; text-transform:uppercase; background:#f1f5f9; }
+    details { border-top:1px solid #e2e8f0; padding:12px 0; } details:first-of-type { border-top:0; }
+    summary { cursor:pointer; font-weight:650; } pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#f8fafc; padding:12px; border-radius:8px; }
+    .finding-title { font-weight:700; } .recommendation { max-width:320px; } ul { padding-left:20px; }
+    footer { margin-top:28px; color:var(--muted); }
+    @media print { body{background:#fff} main{width:100%;margin:0}.card,.panel{box-shadow:none} details{break-inside:avoid} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>VPS Security Audit</h1>
+    <div class="muted">{{ report.hostname }} · {{ report.generated_at }} · Scan {{ report.scan_id }}</div>
+  </header>
+
+  <h2>Executive summary</h2>
+  <section class="grid">
+    <div class="card"><span class="muted">Security score</span><strong class="score">{{ report.score }}/100</strong></div>
+    <div class="card"><span class="muted">Risk level</span><strong class="risk-{{ report.risk_level }}">{{ report.risk_level }}</strong></div>
+    <div class="card"><span class="muted">Critical</span><strong class="critical">{{ counts.critical }}</strong></div>
+    <div class="card"><span class="muted">High</span><strong class="high">{{ counts.high }}</strong></div>
+    <div class="card"><span class="muted">Module warnings</span><strong>{{ module_errors }}</strong></div>
+    <div class="card"><span class="muted">Previous score</span><strong>{{ report.previous_score if report.previous_score is not none else "—" }}</strong></div>
+  </section>
+
+  <h2>Priority recommendations</h2>
+  <section class="panel">
+    {% set priority = report.findings | selectattr("severity.value", "in", ["critical","high"]) | list %}
+    {% if priority %}
+    <ul>{% for finding in priority[:10] %}<li><strong>{{ finding.title }}</strong> — {{ finding.recommendation }}</li>{% endfor %}</ul>
+    {% else %}<p>No critical or high findings were produced by this scan.</p>{% endif %}
+  </section>
+
+  <h2>Findings</h2>
+  <section class="panel">
+    {% if report.findings %}
+    <table>
+      <thead><tr><th>Risk</th><th>Finding</th><th>Evidence</th><th>Recommendation</th></tr></thead>
+      <tbody>
+      {% for finding in report.findings %}
+        <tr>
+          <td><span class="badge {{ finding.severity.value }}">{{ finding.severity.value }}</span></td>
+          <td><span class="finding-title">{{ finding.title }}</span><br><span class="muted">{{ finding.category }} · {{ finding.finding_id }}</span><br>{{ finding.description }}</td>
+          <td><pre>{{ finding.evidence }}</pre></td>
+          <td class="recommendation">{{ finding.recommendation }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p>No security findings were produced.</p>{% endif %}
+  </section>
+
+  <h2>Historical comparison</h2>
+  <section class="panel">
+    {% if report.changes %}
+      <ul>{% for change in report.changes %}<li><span class="badge {{ change.severity }}">{{ change.type }}</span> {{ change.description }}</li>{% endfor %}</ul>
+    {% else %}<p>No tracked changes since the previous scan.</p>{% endif %}
+  </section>
+
+  <h2>Module details</h2>
+  <section class="panel">
+    {% for module in report.module_results %}
+    <details>
+      <summary>{{ module.name | replace("_"," ") | title }} — {{ module.findings | length }} finding(s), {{ module.duration_ms }} ms</summary>
+      {% if module.errors %}<h3>Collection warnings</h3><ul>{% for error in module.errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+      <h3>Collected data</h3><pre>{{ module.data | tojson(indent=2) }}</pre>
+    </details>
+    {% endfor %}
+  </section>
+  <footer>This report is observational. The audit did not change services, firewall rules, accounts, or files outside its report/history store.</footer>
+</main>
+</body>
+</html>
